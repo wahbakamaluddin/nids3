@@ -6,3 +6,4 @@ Icon?
 *.csv
 hide/
 .*/
+*.joblib
