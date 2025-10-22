@@ -22,9 +22,6 @@ Index(['Destination Port', 'Flow Duration', 'Total Fwd Packets',
 
 '''
 
-
-
-
 from scapy.all import *
 import numpy as np
 
@@ -104,6 +101,9 @@ flow_stats = defaultdict(lambda: {
             'Idle Min': 0, 
         }
         })
+
+def anomaly_detector(flow):
+    ff
 
 def feature_extractor(flow_key):
     flow = flow_stats[flow_key]
@@ -238,7 +238,6 @@ def feature_extractor(flow_key):
     
     print(flow_key, flow['features'])
     # return flow['features']    
-
 
 def packet_parser(packet):
 
