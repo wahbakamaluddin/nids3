@@ -1,36 +1,22 @@
-'''
-Features required by model:
-
-Index(['Destination Port', 'Flow Duration', 'Total Fwd Packets',
-       'Total Length of Fwd Packets', 'Fwd Packet Length Max',
-       'Fwd Packet Length Min', 'Fwd Packet Length Mean',
-       'Fwd Packet Length Std', 'Bwd Packet Length Max',
-       'Bwd Packet Length Min', 'Bwd Packet Length Mean',
-       'Bwd Packet Length Std', 'Flow Bytes/s', 'Flow Packets/s',
-       'Flow IAT Mean', 'Flow IAT Std', 'Flow IAT Max', 'Flow IAT Min',
-       'Fwd IAT Total', 'Fwd IAT Mean', 'Fwd IAT Std', 'Fwd IAT Max',
-       'Fwd IAT Min', 'Bwd IAT Total', 'Bwd IAT Mean', 'Bwd IAT Std',
-       'Bwd IAT Max', 'Bwd IAT Min', 'Fwd Header Length', 'Bwd Header Length',
-       'Fwd Packets/s', 'Bwd Packets/s', 'Min Packet Length',
-       'Max Packet Length', 'Packet Length Mean', 'Packet Length Std',
-       'Packet Length Variance', 'FIN Flag Count', 'PSH Flag Count',
-       'ACK Flag Count', 'Average Packet Size', 'Subflow Fwd Bytes',
-       'Init_Win_bytes_forward', 'Init_Win_bytes_backward', 'act_data_pkt_fwd',
-       'min_seg_size_forward', 'Active Mean', 'Active Max', 'Active Min',
-       'Idle Mean', 'Idle Max', 'Idle Min', 'Attack Type'],
-      dtype='object')
-
-'''
-
 from scapy.all import *
+from collections import defaultdict, deque
 import numpy as np
+import time
+import threading
+import joblib  # For model loading (optional)
 
+# ====================================================
+# CONFIGURATION
 # ====================================================
 FLOW_TIMEOUT = 60                # seconds to keep inactive flow
 INACTIVITY_THRESHOLD = 1.0       # threshold to define idle/active periods
 FEATURE_EXTRACT_INTERVAL = 1.0   # seconds between feature extractions
 INTERFACE = "en0"                # network interface
 
+# Load model (optional)
+model = joblib.load("/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib")
+
+# Model-required features (order matters)
 required_features = [
     'Destination Port', 'Flow Duration', 'Total Fwd Packets', 'Total Length of Fwd Packets',
     'Fwd Packet Length Max', 'Fwd Packet Length Min', 'Fwd Packet Length Mean',
@@ -47,9 +33,9 @@ required_features = [
     'Idle Mean', 'Idle Max', 'Idle Min', 'Attack Type'
 ]
 
-
-# Declare a dictionary to store flow statistcs
-# defaultdict() will add a new entry based on provided value if the key being called is not defined
+# ====================================================
+# FLOW STRUCTURE
+# ====================================================
 flow_stats = defaultdict(lambda: {
     'start_time': None,
     'end_time': None,
@@ -87,16 +73,18 @@ flow_stats = defaultdict(lambda: {
     'active_start': None,
     'idle_start': None,
     'fwd_data_packets': 0,
-    'features': {feat: 0 for feat in required_features}
+    'features': {feature: 0 for feature in required_features}
 })
 
-
-def anomaly_detector(flow):
-    return
-
+# ====================================================
+# FEATURE EXTRACTION
+# ====================================================
 def feature_extractor(flow_key):
     flow = flow_stats[flow_key]
+    current_time = time.time()
 
+    # Update end time
+    flow['end_time'] = current_time
     duration = flow['end_time'] - flow['start_time']
     if duration <= 0:
         duration = 0.001
@@ -193,153 +181,156 @@ def feature_extractor(flow_key):
     flow['features']['min_seg_size_forward'] = flow['min_seg_size_forward'] if flow['min_seg_size_forward'] != float('inf') else 0
     flow['features']['act_data_pkt_fwd'] = flow['fwd_data_packets']
     flow['features']['Subflow Fwd Bytes'] = flow['fwd_bytes']
-        
-    print(f"[+] Extracted {flow_key}: {flow['features']['Flow Bytes/s']:.2f} B/s")
-    # return flow['features']    
 
+    # Placeholder Attack Type
+    flow['features']['Attack Type'] = "Benign"
+
+    anomaly_detector(flow)
+
+    # Optionally call anomaly detector
+    # prediction = anomaly_detector(flow)
+
+    # print(f"[+] Extracted {flow_key}: {flow['features']['Flow Bytes/s']:.2f} B/s")s
+
+# ====================================================
+# ANOMALY DETECTOR (Optional)
+# ====================================================
+def anomaly_detector(flow):
+    X = np.array([flow['features'][feature] for feature in required_features[:-1]]).reshape(1, -1)
+    pred = model.predict(X)
+    print(X, pred)
+    # return pred[0]
+
+# ====================================================
+# PACKET PARSER
+# ====================================================
 def packet_parser(packet):
-
     if IP not in packet:
         return
-    # Extract network flow identifier components:
-    
-    # Extract source IP and destination IP
-    src_ip = packet[IP].src
-    dst_ip = packet[IP].dst
+
+    src_ip, dst_ip = packet[IP].src, packet[IP].dst
+    protocol, src_port, dst_port, header_len, window_size = None, None, None, 0, 0
 
     if TCP in packet:
         protocol = 'TCP'
-        src_port = packet[TCP].sport
-        dst_port = packet[TCP].dport
-        header_length = len(packet[TCP])
-
-        # Extract window size
-        if hasattr(packet[TCP], 'window'):
-            window_size = packet[TCP].window
-        else:
-            window_size = 0
-
+        src_port, dst_port = packet[TCP].sport, packet[TCP].dport
+        header_len = len(packet[TCP])
+        window_size = getattr(packet[TCP], 'window', 0)
     elif UDP in packet:
         protocol = 'UDP'
-        src_port = packet[UDP].sport
-        dst_port = packet[UDP].dport
-        header_length = len(packet[UDP])
-        window_size = 0
+        src_port, dst_port = packet[UDP].sport, packet[UDP].dport
+        header_len = len(packet[UDP])
     else:
         return
-    
-    # Get packet_length and current time
-    packet_size = len(packet)
+
     current_time = time.time()
-    
-    # Generate flow identifier (key) as 5-tuple network flow
-    forward_key = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}" # src = initator, dst = responder
+    packet_size = len(packet)
+    forward_key = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
     backward_key = f"{dst_ip}:{dst_port}-{src_ip}:{src_port}-{protocol}"
 
-    # Check if this packet belongs to an existing flow (either direction)
+    # Determine flow direction
     if forward_key in flow_stats:
-        flow_key = forward_key
-        is_forward = True
+        flow_key, is_forward = forward_key, True
     elif backward_key in flow_stats:
-        flow_key = backward_key
-        is_forward = False
+        flow_key, is_forward = backward_key, False
     else:
-        # New flow - use forward key as canonical identifier
-        flow_key = forward_key
-        is_forward = True
+        flow_key, is_forward = forward_key, True
 
-    # Get flow statistics
     flow = flow_stats[flow_key]
 
-    # Initialize flow if this is the first paket
+    # Initialize flow
     if flow['start_time'] is None:
         flow['start_time'] = current_time
+        flow['end_time'] = current_time
         flow['active_start'] = current_time
         flow['active'] = True
-        
-        # Update flow end time
-        flow['end_time'] = current_time
-        
-        # Calculate and store inter-arrival time
-        if flow['last_packet_time'] is not None:
-            iat = current_time - flow['last_packet_time']
-            flow['flow_iat'].append(iat)
-            
-    flow['last_packet_time'] = current_time
 
+    # Update active/idle tracking
+    if flow['last_packet_time']:
+        delta = current_time - flow['last_packet_time']
+        if delta > INACTIVITY_THRESHOLD:
+            if flow['active']:
+                flow['active_times'].append(current_time - flow['active_start'])
+                flow['active'] = False
+                flow['idle_start'] = current_time
+        else:
+            if not flow['active']:
+                flow['idle_times'].append(current_time - flow['idle_start'])
+                flow['active'] = True
+                flow['active_start'] = current_time
+
+    flow['last_packet_time'] = current_time
+    flow['end_time'] = current_time
+
+    # Forward direction
     if is_forward:
         flow['fwd_packets'] += 1
         flow['fwd_bytes'] += packet_size
         flow['packet_sizes'].append(packet_size)
         flow['fwd_packet_sizes'].append(packet_size)
-        
-        if protocol == 'TCP':
-            if packet[TCP].flags & 0x08:  # PSH flag
-                flow['fwd_psh_flags'] += 1
-                flow['psh_flags'] += 1
-            
-            if packet[TCP].flags & 0x20:  # URG flag
-                flow['fwd_urg_flags'] += 1
-                flow['urg_flags'] += 1
-            
-            if hasattr(packet[TCP], 'flags'):
-                if packet[TCP].flags & 0x01:  # FIN flag
-                    flow['fin_flags'] += 1
-                if packet[TCP].flags & 0x02:  # SYN flag
-                    flow['syn_flags'] += 1
-                if packet[TCP].flags & 0x04:  # RST flag
-                    flow['rst_flags'] += 1
-                if packet[TCP].flags & 0x10:  # ACK flag
-                    flow['ack_flags'] += 1
-                if packet[TCP].flags & 0x40:  # ECE flag
-                    flow['ece_flags'] += 1
-            
-            # Update min_seg_size_forward
-            if hasattr(packet[TCP], 'options'):
-                mss = next((x[1] for x in packet[TCP].options if x[0] == 'MSS'), None)
-                if mss is not None and mss < flow['min_seg_size_forward']:
-                    flow['min_seg_size_forward'] = mss
-        
-        flow['fwd_header_bytes'] += header_length
-        
-        # Store initial window size
+        flow['fwd_header_bytes'] += header_len
+
+        # Flags and MSS
+        if TCP in packet:
+            flags = packet[TCP].flags
+            if flags & 0x01: flow['fin_flags'] += 1
+            if flags & 0x02: flow['syn_flags'] += 1
+            if flags & 0x04: flow['rst_flags'] += 1
+            if flags & 0x08: flow['psh_flags'] += 1
+            if flags & 0x10: flow['ack_flags'] += 1
+            if flags & 0x20: flow['urg_flags'] += 1
+            if flags & 0x40: flow['ece_flags'] += 1
+            for opt in packet[TCP].options:
+                if opt[0] == 'MSS' and opt[1] < flow['min_seg_size_forward']:
+                    flow['min_seg_size_forward'] = opt[1]
+
         if flow['fwd_win_bytes'] is None and window_size > 0:
             flow['fwd_win_bytes'] = window_size
-        
-        # Check if this is a data packet
         if TCP in packet and len(packet[TCP].payload) > 0:
             flow['fwd_data_packets'] += 1
-        
-        # Update IAT for forward packets
-        if flow['last_fwd_packet_time'] is not None:
+        if flow['last_fwd_packet_time']:
             flow['fwd_iat'].append(current_time - flow['last_fwd_packet_time'])
         flow['last_fwd_packet_time'] = current_time
 
-    # If packet is backward (is_forward = False)       
+    # Backward direction
     else:
         flow['bwd_packets'] += 1
         flow['bwd_bytes'] += packet_size
         flow['packet_sizes'].append(packet_size)
         flow['bwd_packet_sizes'].append(packet_size)
-        flow['bwd_header_bytes'] += header_length
-        
-        # Store initial window size
+        flow['bwd_header_bytes'] += header_len
         if flow['bwd_win_bytes'] is None and window_size > 0:
             flow['bwd_win_bytes'] = window_size
-        
-        # Update IAT for backward packets
-        if flow['last_bwd_packet_time'] is not None:
+        if flow['last_bwd_packet_time']:
             flow['bwd_iat'].append(current_time - flow['last_bwd_packet_time'])
         flow['last_bwd_packet_time'] = current_time
-    
-        if (flow['last_detection_time'] is None) or (current_time - flow['last_detection_time'] > FEATURE_EXTRACT_INTERVAL):
-                feature_extractor(flow_key)
-                flow['last_detection_time'] = current_time
-    
+
+    # Periodic feature extraction
+    if (flow['last_detection_time'] is None) or (current_time - flow['last_detection_time'] > FEATURE_EXTRACT_INTERVAL):
+        feature_extractor(flow_key)
+        flow['last_detection_time'] = current_time
+
+# ====================================================
+# CLEANUP THREAD
+# ====================================================
+def cleanup_flows():
+    while True:
+        now = time.time()
+        for key in list(flow_stats.keys()):
+            if flow_stats[key]['end_time'] and now - flow_stats[key]['end_time'] > FLOW_TIMEOUT:
+                del flow_stats[key]
+        time.sleep(10)
+
+# ====================================================
+# MAIN CAPTURE FUNCTION
+# ====================================================
 def packet_capturer():
-    sniff(iface='en0', prn=packet_parser) # prn is the fallback function for each captured packets
+    threading.Thread(target=cleanup_flows, daemon=True).start()
+    print(f"[*] Capturing packets on {INTERFACE}...")
+    sniff(iface=INTERFACE, prn=packet_parser, store=False)
 
-print(f"Value of __name__: {__name__}")
-
+# ====================================================
+# ENTRY POINT
+# ====================================================
 if __name__ == "__main__":
     packet_capturer()
