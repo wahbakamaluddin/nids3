@@ -6,6 +6,8 @@ import numpy as np
 import time
 import threading
 import joblib
+import psutil
+import pandas as pd
 
 # ====================================================
 # CONFIGURATION
@@ -57,18 +59,29 @@ flow_stats = defaultdict(lambda: {
 # ANOMALY DETECTION
 # ====================================================
 def anomaly_detector(flow):
-    X = np.array([flow['features'][feature] for feature in required_features[:-1]]).reshape(1, -1)
+    X = pd.DataFrame(
+        [[flow['features'][feature] for feature in required_features[:-1]]],
+        columns=required_features[:-1]
+    )
+    # X = np.array([flow['features'][feature] for feature in required_features[:-1]]).reshape(1, -1)
+    # Use a high-resolution monotonic clock for elapsed timing
+    start_time = time.perf_counter()
     pred = model.predict(X)
-    return pred[0]
+    total_time = time.perf_counter() - start_time
+    # convert to milliseconds for reporting
+    total_time_ms = total_time * 1000.0
+    return pred[0], total_time_ms
 
 # ====================================================
 # FEATURE EXTRACTOR
 # ====================================================
 def feature_extractor(flow_key, log_widget):
     flow = flow_stats[flow_key]
-    current_time = time.time()
+    # Use perf_counter for elapsed measurements (monotonic, high-res)
+    current_time = time.perf_counter()
     flow['end_time'] = current_time
-    duration = max(current_time - flow['start_time'], 0.001)
+    # Ensure start_time was recorded using perf_counter as well
+    duration = max(current_time - flow['start_time'], 0.001) if flow['start_time'] is not None else 0.001
 
     # Simplified subset for clarity
     flow['features']['Flow Duration'] = duration
@@ -79,11 +92,10 @@ def feature_extractor(flow_key, log_widget):
     flow['features']['Attack Type'] = "Benign"
 
     # Predict
-    pred = anomaly_detector(flow)
-    result = pred
+    prediction, time_taken_ms = anomaly_detector(flow)
 
-    # Update GUI log
-    log_widget.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {result}\n")
+    # Update GUI log (show prediction latency in ms)
+    log_widget.insert(tk.END, f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {prediction} - {time_taken_ms:.3f} ms\n")
     log_widget.see(tk.END)
 
 # ====================================================
@@ -102,7 +114,8 @@ def packet_parser(packet, log_widget):
     else:
         return
 
-    current_time = time.time()
+    # record times using perf_counter for elapsed calculations
+    current_time = time.perf_counter()
     key = f"{src_ip}:{src_port}-{dst_ip}:{dst_port}-{protocol}"
     flow = flow_stats[key]
     if flow['start_time'] is None:
@@ -136,22 +149,74 @@ def stop_capture():
 # GUI SETUP
 # ====================================================
 def start_gui():
+    process = psutil.Process()  # This process (the NIDS itself)
+
+    def update_process_usage():
+        while True:
+            try:
+                # CPU usage (%) of this process only
+                cpu_usage = process.cpu_percent(interval=1)
+
+                # Memory usage (in MB and %)
+                mem_info = process.memory_info()
+                mem_usage_mb = mem_info.rss / (1024 * 1024)
+                mem_percent = process.memory_percent()
+
+                # Battery / Power info
+                battery = psutil.sensors_battery()
+                if battery:
+                    power_text = f"Battery: {battery.percent:.0f}% ({'Plugged In' if battery.power_plugged else 'On Battery'})"
+                else:
+                    power_text = "Power: N/A"
+
+                # Update GUI labels
+                cpu_label.config(text=f"CPU: {cpu_usage:.1f}%")
+                mem_label.config(text=f"Memory: {mem_usage_mb:.1f} MB ({mem_percent:.1f}%)")
+                power_label.config(text=power_text)
+            except Exception as e:
+                cpu_label.config(text=f"CPU: Error")
+                mem_label.config(text=f"Memory: Error")
+                power_label.config(text="Power: Error")
+
+            time.sleep(2)
+
     root = tk.Tk()
     root.title("Lightweight NIDS Monitor")
-    root.geometry("600x400")
+    root.geometry("650x450")
 
-    ttk.Label(root, text="Network Interface:").pack(pady=5)
+    ttk.Label(root, text="Lightweight NIDS Monitor", font=("Segoe UI", 14, "bold")).pack(pady=5)
+
+    ttk.Label(root, text="Network Interface:").pack(pady=3)
     interface_entry = ttk.Entry(root)
     interface_entry.insert(0, INTERFACE)
     interface_entry.pack()
 
+    # === Process Usage Section ===
+    sys_frame = ttk.Frame(root)
+    sys_frame.pack(pady=5)
+
+    cpu_label = ttk.Label(sys_frame, text="CPU: --%", font=("Consolas", 10))
+    cpu_label.pack(side=tk.LEFT, padx=10)
+
+    mem_label = ttk.Label(sys_frame, text="Memory: --%", font=("Consolas", 10))
+    mem_label.pack(side=tk.LEFT, padx=10)
+
+    power_label = ttk.Label(sys_frame, text="Power: --", font=("Consolas", 10))
+    power_label.pack(side=tk.LEFT, padx=10)
+
+    # === Log widget ===
     log_widget = tk.Text(root, height=18, bg="black", fg="lime", insertbackground="white")
     log_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
+    # === Buttons ===
     button_frame = ttk.Frame(root)
     button_frame.pack(pady=10)
 
-    start_btn = ttk.Button(button_frame, text="Start Capture", command=lambda: threading.Thread(target=capture_packets, args=(log_widget,), daemon=True).start())
+    start_btn = ttk.Button(
+        button_frame,
+        text="Start Capture",
+        command=lambda: threading.Thread(target=capture_packets, args=(log_widget,), daemon=True).start()
+    )
     start_btn.pack(side=tk.LEFT, padx=5)
 
     stop_btn = ttk.Button(button_frame, text="Stop Capture", command=stop_capture)
@@ -159,6 +224,9 @@ def start_gui():
 
     exit_btn = ttk.Button(button_frame, text="Exit", command=root.destroy)
     exit_btn.pack(side=tk.LEFT, padx=5)
+
+    # Start process usage monitor thread
+    threading.Thread(target=update_process_usage, daemon=True).start()
 
     root.mainloop()
 
