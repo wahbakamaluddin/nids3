@@ -63,7 +63,6 @@ def anomaly_detector(flow):
         [[flow['features'][feature] for feature in required_features[:-1]]],
         columns=required_features[:-1]
     )
-    # X = np.array([flow['features'][feature] for feature in required_features[:-1]]).reshape(1, -1)
     # Use a high-resolution monotonic clock for elapsed timing
     start_time = time.perf_counter()
     pred = model.predict(X)
@@ -83,13 +82,98 @@ def feature_extractor(flow_key, log_widget):
     # Ensure start_time was recorded using perf_counter as well
     duration = max(current_time - flow['start_time'], 0.001) if flow['start_time'] is not None else 0.001
 
-    # Simplified subset for clarity
+  # Parse destination port
+    parts = flow_key.split('-')
+    try:
+        dst_part = parts[0].split(':')[1] if ':' in parts[0] else parts[1].split(':')[1]
+        flow['features']['Destination Port'] = int(dst_part)
+    except:
+        flow['features']['Destination Port'] = 0
+
+    # Flow duration and rates
     flow['features']['Flow Duration'] = duration
     flow['features']['Flow Bytes/s'] = (flow['fwd_bytes'] + flow['bwd_bytes']) / duration
     flow['features']['Flow Packets/s'] = (flow['fwd_packets'] + flow['bwd_packets']) / duration
+
+    # Forward features
+    fwd_sizes = flow['fwd_packet_sizes']
     flow['features']['Total Fwd Packets'] = flow['fwd_packets']
     flow['features']['Total Length of Fwd Packets'] = flow['fwd_bytes']
-    flow['features']['Attack Type'] = "Benign"
+    flow['features']['Fwd Packet Length Min'] = min(fwd_sizes) if fwd_sizes else 0
+    flow['features']['Fwd Packet Length Max'] = max(fwd_sizes) if fwd_sizes else 0
+    flow['features']['Fwd Packet Length Mean'] = np.mean(fwd_sizes) if fwd_sizes else 0
+    flow['features']['Fwd Packet Length Std'] = np.std(fwd_sizes) if len(fwd_sizes) > 1 else 0
+    flow['features']['Fwd Packets/s'] = flow['fwd_packets'] / duration
+    flow['features']['Fwd Header Length'] = flow['fwd_header_bytes']
+
+    # Backward features
+    bwd_sizes = flow['bwd_packet_sizes']
+    flow['features']['Bwd Packets/s'] = flow['bwd_packets'] / duration
+    flow['features']['Bwd Packet Length Min'] = min(bwd_sizes) if bwd_sizes else 0
+    flow['features']['Bwd Packet Length Max'] = max(bwd_sizes) if bwd_sizes else 0
+    flow['features']['Bwd Packet Length Mean'] = np.mean(bwd_sizes) if bwd_sizes else 0
+    flow['features']['Bwd Packet Length Std'] = np.std(bwd_sizes) if len(bwd_sizes) > 1 else 0
+    flow['features']['Bwd Header Length'] = flow['bwd_header_bytes']
+
+    # Packet length stats
+    pkt_sizes = flow['packet_sizes']
+    flow['features']['Min Packet Length'] = min(pkt_sizes) if pkt_sizes else 0
+    flow['features']['Max Packet Length'] = max(pkt_sizes) if pkt_sizes else 0
+    flow['features']['Packet Length Mean'] = np.mean(pkt_sizes) if pkt_sizes else 0
+    flow['features']['Packet Length Std'] = np.std(pkt_sizes) if len(pkt_sizes) > 1 else 0
+    flow['features']['Packet Length Variance'] = np.var(pkt_sizes) if len(pkt_sizes) > 1 else 0
+
+    # Average packet size
+    total_pkts = flow['fwd_packets'] + flow['bwd_packets']
+    flow['features']['Average Packet Size'] = (flow['fwd_bytes'] + flow['bwd_bytes']) / total_pkts if total_pkts > 0 else 0
+
+    # IAT stats
+    if flow['flow_iat']:
+        flow['features']['Flow IAT Mean'] = np.mean(flow['flow_iat'])
+        flow['features']['Flow IAT Std'] = np.std(flow['flow_iat'])
+        flow['features']['Flow IAT Max'] = max(flow['flow_iat'])
+        flow['features']['Flow IAT Min'] = min(flow['flow_iat'])
+
+    # Forward IAT
+    if flow['fwd_iat']:
+        flow['features']['Fwd IAT Total'] = sum(flow['fwd_iat'])
+        flow['features']['Fwd IAT Mean'] = np.mean(flow['fwd_iat'])
+        flow['features']['Fwd IAT Std'] = np.std(flow['fwd_iat'])
+        flow['features']['Fwd IAT Max'] = max(flow['fwd_iat'])
+        flow['features']['Fwd IAT Min'] = min(flow['fwd_iat'])
+
+    # Backward IAT
+    if flow['bwd_iat']:
+        flow['features']['Bwd IAT Total'] = sum(flow['bwd_iat'])
+        flow['features']['Bwd IAT Mean'] = np.mean(flow['bwd_iat'])
+        flow['features']['Bwd IAT Std'] = np.std(flow['bwd_iat'])
+        flow['features']['Bwd IAT Max'] = max(flow['bwd_iat'])
+        flow['features']['Bwd IAT Min'] = min(flow['bwd_iat'])
+
+    # Flags
+    flow['features']['FIN Flag Count'] = flow['fin_flags']
+    flow['features']['PSH Flag Count'] = flow['psh_flags']
+    flow['features']['ACK Flag Count'] = flow['ack_flags']
+
+    # Window
+    flow['features']['Init_Win_bytes_forward'] = flow['fwd_win_bytes'] or 0
+    flow['features']['Init_Win_bytes_backward'] = flow['bwd_win_bytes'] or 0
+
+    # Active/Idle stats
+    if flow['active_times']:
+        flow['features']['Active Mean'] = np.mean(flow['active_times'])
+        flow['features']['Active Max'] = max(flow['active_times'])
+        flow['features']['Active Min'] = min(flow['active_times'])
+
+    if flow['idle_times']:
+        flow['features']['Idle Mean'] = np.mean(flow['idle_times'])
+        flow['features']['Idle Max'] = max(flow['idle_times'])
+        flow['features']['Idle Min'] = min(flow['idle_times'])
+
+    # Extra
+    flow['features']['min_seg_size_forward'] = flow['min_seg_size_forward'] if flow['min_seg_size_forward'] != float('inf') else 0
+    flow['features']['act_data_pkt_fwd'] = flow['fwd_data_packets']
+    flow['features']['Subflow Fwd Bytes'] = flow['fwd_bytes']
 
     # Predict
     prediction, time_taken_ms = anomaly_detector(flow)
@@ -139,6 +223,14 @@ capturing = False
 packet_count = 0  # === Added Throughput ===
 throughput = 0.0  # packets per second
 
+def cleanup_flows():
+    while True:
+        now = time.time()
+        for key in list(flow_stats.keys()):
+            if flow_stats[key]['end_time'] and now - flow_stats[key]['end_time'] > FLOW_TIMEOUT:
+                del flow_stats[key]
+        time.sleep(10)
+
 def throughput_monitor(throughput_label):
     global packet_count, throughput
     prev_count = 0
@@ -149,7 +241,8 @@ def throughput_monitor(throughput_label):
         prev_count = current_count
         throughput_label.config(text=f"Throughput: {throughput:.1f} pkt/s")
 
-def capture_packets(log_widget):
+def packet_capture(log_widget):
+    threading.Thread(target=cleanup_flows, daemon=True).start()
     global capturing
     capturing = True
     log_widget.insert(tk.END, "[*] Started capturing packets...\n")
@@ -233,7 +326,7 @@ def start_gui():
     start_btn = ttk.Button(
         button_frame,
         text="Start Capture",
-        command=lambda: threading.Thread(target=capture_packets, args=(log_widget,), daemon=True).start()
+        command=lambda: threading.Thread(target=packet_capture, args=(log_widget,), daemon=True).start()
     )
     start_btn.pack(side=tk.LEFT, padx=5)
 

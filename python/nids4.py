@@ -187,19 +187,13 @@ def feature_extractor(flow_key):
 
     anomaly_detector(flow)
 
-    # Optionally call anomaly detector
-    # prediction = anomaly_detector(flow)
-
-    # print(f"[+] Extracted {flow_key}: {flow['features']['Flow Bytes/s']:.2f} B/s")s
-
 # ====================================================
 # ANOMALY DETECTOR (Optional)
 # ====================================================
 def anomaly_detector(flow):
     X = np.array([flow['features'][feature] for feature in required_features[:-1]]).reshape(1, -1)
     pred = model.predict(X)
-    print(X, pred)
-    # return pred[0]
+    return pred[0]
 
 # ====================================================
 # PACKET PARSER
