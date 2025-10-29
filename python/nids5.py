@@ -102,6 +102,9 @@ def feature_extractor(flow_key, log_widget):
 # PACKET PARSER
 # ====================================================
 def packet_parser(packet, log_widget):
+    global packet_count
+    packet_count += 1
+
     if IP not in packet:
         return
     src_ip, dst_ip = packet[IP].src, packet[IP].dst
@@ -133,6 +136,18 @@ def packet_parser(packet, log_widget):
 # CAPTURE THREAD
 # ====================================================
 capturing = False
+packet_count = 0  # === Added Throughput ===
+throughput = 0.0  # packets per second
+
+def throughput_monitor(throughput_label):
+    global packet_count, throughput
+    prev_count = 0
+    while True:
+        time.sleep(1)
+        current_count = packet_count
+        throughput = current_count - prev_count  # packets processed in the last second
+        prev_count = current_count
+        throughput_label.config(text=f"Throughput: {throughput:.1f} pkt/s")
 
 def capture_packets(log_widget):
     global capturing
@@ -203,6 +218,9 @@ def start_gui():
 
     power_label = ttk.Label(sys_frame, text="Power: --", font=("Consolas", 10))
     power_label.pack(side=tk.LEFT, padx=10)
+    
+    throughput_label = ttk.Label(sys_frame, text="Throughput: -- pkt/s", font=("Consolas", 10))
+    throughput_label.pack(side=tk.LEFT, padx=10)
 
     # === Log widget ===
     log_widget = tk.Text(root, height=18, bg="black", fg="lime", insertbackground="white")
@@ -227,6 +245,8 @@ def start_gui():
 
     # Start process usage monitor thread
     threading.Thread(target=update_process_usage, daemon=True).start()
+
+    threading.Thread(target=throughput_monitor, args=(throughput_label,), daemon=True).start()
 
     root.mainloop()
 
