@@ -505,20 +505,45 @@ class NIDSEngine:
             self.on_throughput(throughput)
 
 if __name__ == "__main__":
-    def log(msg):
-        print(msg)
-
-    def throughput(throughput):
-        print(throughput)
-
-    interface = "en0"
-    model_path = "/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib"
-
-    nids = NIDSEngine(interface=interface, model_path=model_path, on_log=log, on_throughput=throughput)
-    nids.start()
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        nids.stop()
+    import argparse
+    
+    def main():
+        """Main function to start NIDS with or without GUI."""
+        parser = argparse.ArgumentParser(description='Network Intrusion Detection System')
+        parser.add_argument('--gui', action='store_true', help='Start with GUI interface')
+        parser.add_argumenst('--interface', default='en0', help='Network interface to monitor')
+        parser.add_argument('--model', default='/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib', 
+                          help='Path to trained model')
+        
+        args = parser.parse_args()
+        
+        # Create NIDS engine
+        nids = NIDSEngine(
+            interface=args.interface,
+            model_path=args.model
+        )
+        
+        if args.gui:
+            # Start with GUI
+            gui = NIDSGUI(nids)
+            gui.start_gui()
+        else:
+            # Start in console mode
+            def log(msg):
+                print(msg)
+            
+            def throughput(tput):
+                print(f"Throughput: {tput} pkt/s")
+            
+            nids.on_log = log
+            nids.on_throughput = throughput
+            
+            nids.start()
+            
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                nids.stop()
+    
+    main()
