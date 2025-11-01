@@ -1,7 +1,11 @@
+import threading
+import time
 from collections import defaultdict, deque
-from scapy.all import sniff, IP, TCP, UDP
-import joblib, numpy as np, pandas as pd, threading, time
 
+import joblib
+import numpy as np
+import pandas as pd
+from scapy.all import IP, TCP, UDP, sniff
 
 REQUIRED_FEATURES = [
     'Destination Port', 'Flow Duration', 'Total Fwd Packets', 'Total Length of Fwd Packets',
@@ -60,6 +64,7 @@ FLOW_STATS = defaultdict(lambda: {
 })
 
 class NIDSEngine:
+    """Network Intrusion Detection System engine for real-time traffic analysis."""
 
     def __init__(
             self, 
@@ -69,23 +74,46 @@ class NIDSEngine:
             on_throughput=None,
             flow_timeout=60,
             inactivity_threshold=1.0,
-            feature_extract_interval=1.0):
-        
-        self.interface = interface
-        self.model = joblib.load(model_path)
-        self.on_log = on_log or (lambda msg: print(msg))
-        self.on_throughput = on_throughput or None
-        self.flow_timeout = flow_timeout
-        self.inactivity_threshold = inactivity_threshold
-        self.feature_extract_interval = feature_extract_interval
-        self.flow_stats = FLOW_STATS
-        self.required_features = REQUIRED_FEATURES
-        
-        self.capturing = False
-        self.packet_count = 0
-        self.prev_count = 0
+            feature_extract_interval=1.0
+        ):
+            """Initialize NIDS engine.
+            
+            Args:
+                interface: Network interface to monitor
+                model_path: Path to trained ML model
+                on_log: Callback for log messages
+                on_throughput: Callback for throughput updates
+                flow_timeout: Seconds before cleaning up inactive flows
+                inactivity_threshold: Seconds to consider flow idle
+                feature_extract_interval: Seconds between feature extraction
+            
+            Raises:
+                FileNotFoundError: If model_path does not exist
+                Exception: If model loading fails
+            """
+            
+            self.interface = interface
+            self.model = joblib.load(model_path)
+            self.on_log = on_log or (lambda msg: print(msg))
+            self.on_throughput = on_throughput or None
+            self.flow_timeout = flow_timeout
+            self.inactivity_threshold = inactivity_threshold
+            self.feature_extract_interval = feature_extract_interval
+            self.flow_stats = FLOW_STATS
+            self.required_features = REQUIRED_FEATURES
+            
+            self.capturing = False
+            self.packet_count = 0
+            self.prev_count = 0
     
     def start(self):
+        """Start the NIDS packet capture and monitoring threads.
+    
+        Initializes three background threads:
+        - Flow cleanup (removes stale flows)
+        - Packet capture (main packet processing)
+        - Throughput monitoring (performance tracking)
+        """
         self.capturing = True
         self.on_log("[*] Started packet capture ...")
         threading.Thread(target=self._cleanup_flows, daemon=True).start()
@@ -93,34 +121,70 @@ class NIDSEngine:
         threading.Thread(target=self._throughput_monitor, daemon=True).start()
 
     def stop(self):
+        """Stop all NIDS operations and background threads.
+            
+        Sets capturing flag to False, which gracefully stops packet capture
+        and monitoring threads on their next iteration.
+        """
         self.capturing = False
         self.on_log("[!] Stopped packet capture ...")
 
     def _anomaly_detector(self, flow_key, features):
+        """Detect network anomalies using trained ML model.
+    
+        Converts extracted features to DataFrame format and runs inference
+        with the trained model to classify network flow behavior.
+        
+        Args:
+            flow_key (str): Unique identifier for the network flow
+            features (dict): Dictionary of extracted flow features
+            
+        Logs:
+            Prediction results with timestamp and processing time
+            Errors if model inference fails
+            
+        Note:
+            Uses high-resolution timer to measure prediction latency
+        """
+        X = pd.DataFrame(
+            [[features[feature] for feature in self.required_features]],
+            columns=self.required_features
+        )
+
+        try:
             X = pd.DataFrame(
                 [[features[feature] for feature in self.required_features]],
                 columns=self.required_features
             )
-
-            try:
-                X = pd.DataFrame(
-                    [[features[feature] for feature in self.required_features]],
-                    columns=self.required_features
-                )
-                
-                start_time = time.perf_counter()
-                pred = self.model.predict(X)
-                total_time_ms = (time.perf_counter() - start_time) * 1000
-                
-                msg = f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred[0]} ({total_time_ms:.2f} ms)"
-                self.on_log(msg)
-                
-            except Exception as e:
-                self.on_log(f"Detection error for {flow_key}: {str(e)}")
+            
+            start_time = time.perf_counter()
+            pred = self.model.predict(X)
+            total_time_ms = (time.perf_counter() - start_time) * 1000
+            
+            msg = f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred[0]} ({total_time_ms:.2f} ms)"
+            self.on_log(msg)
+            
+        except Exception as e:
+            self.on_log(f"Detection error for {flow_key}: {str(e)}")
 
     def _feature_extractor(self, flow_key):
+        """Extract machine learning features from network flow statistics.
+            
+            Calculates 50+ statistical features including timing, packet sizes,
+            protocol flags, and flow characteristics required by the ML model.
+            
+            Args:
+                flow_key (str): Unique identifier for the network flow
+                
+            Returns:
+                dict: Complete feature dictionary ready for model inference
+                
+            Note:
+                Handles edge cases for empty statistics and division by zero
+                Converts deques to lists once for efficient computation
+            """
         flow = self.flow_stats[flow_key]
-        features =  {}
+        features = {}
 
         duration = flow['end_time'] - flow['start_time']
         if duration <= 0:
@@ -222,6 +286,24 @@ class NIDSEngine:
         self._anomaly_detector(flow_key, features)
 
     def _packet_parser(self, packet):
+        """Parse individual network packets and update flow statistics.
+        
+        Processes IP packets with TCP/UDP protocols, extracts flow identifiers,
+        updates bidirectional counters, and manages flow state transitions.
+        
+        Args:
+            packet: Scapy packet object containing raw network data
+            
+        Updates:
+            - Flow timing information (IAT, duration)
+            - Packet counters and byte totals
+            - TCP flags and protocol features
+            - Active/idle state transitions
+            
+        Note:
+            Only processes IP packets; skips other protocols
+            Creates new flows automatically for unseen connections
+        """
         if IP not in packet:
             return
         self.packet_count += 1
@@ -375,9 +457,29 @@ class NIDSEngine:
                 flow['last_detection_time'] = current_time
 
     def _packet_capturer(self):
+        """Main packet capture loop using Scapy sniff function.
+        
+        Continuously captures packets from the specified network interface
+        and passes them to the packet parser for processing.
+        
+        Stops gracefully when capturing flag is set to False.
+        
+        Note:
+            Runs in separate thread to avoid blocking main execution
+            Uses store=False to minimize memory usage
+        """
         sniff(iface=self.interface, prn=self._packet_parser, store=False, stop_filter=lambda _: not self.capturing) # prn is the fallback function for each captured packets
 
     def _cleanup_flows(self):
+        """Periodically remove inactive flows to prevent memory leaks.
+        
+        Scans all active flows every 10 seconds and removes those that
+        have exceeded the flow timeout period without activity.
+        
+        Note:
+            Runs continuously in background thread
+            Prevents unbounded memory growth from long-running flows
+        """
         while True:
             now = time.time()
             for key in list(self.flow_stats.keys()):
@@ -386,6 +488,15 @@ class NIDSEngine:
             time.sleep(10)
 
     def _throughput_monitor(self):
+        """Monitor and report packet processing throughput.
+        
+        Calculates packets processed per second by comparing packet counts
+        at 1-second intervals and reports via callback function.
+        
+        Note:
+            Runs in separate thread with 1-second sampling interval
+            Provides real-time performance monitoring
+        """
         while True:
             time.sleep(1)
             current_count = self.packet_count
