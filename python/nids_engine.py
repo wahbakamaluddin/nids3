@@ -340,11 +340,11 @@ class NIDSEngine:
                 flow['bwd_iat'].append(current_time - flow['last_bwd_packet_time'])
             flow['last_bwd_packet_time'] = current_time
 
-            # Call anomaly_detector()
-            if (flow['last_detection_time'] is None) or (current_time - flow['last_detection_time'] > FEATURE_EXTRACT_INTERVAL):
-                    self._feature_extractor(flow_key)
-                    flow['last_detection_time'] = current_time
-    
+        # Call _feature_extractor()
+        if (flow['last_detection_time'] is None) or (current_time - flow['last_detection_time'] > FEATURE_EXTRACT_INTERVAL):
+                self._feature_extractor(flow_key)
+                flow['last_detection_time'] = current_time
+
     def _packet_capturer(self):
         sniff(iface=self.interface, prn=self._packet_parser, store=False, stop_filter=lambda _: not self.capturing) # prn is the fallback function for each captured packets
 
