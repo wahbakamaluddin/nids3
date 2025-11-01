@@ -2,11 +2,6 @@ from collections import defaultdict, deque
 from scapy.all import sniff, IP, TCP, UDP
 import joblib, numpy as np, pandas as pd, threading, time
 
-# ====================================================
-FLOW_TIMEOUT = 60                # seconds to keep inactive flow
-INACTIVITY_THRESHOLD = 1.0       # threshold to define idle/active periods
-FEATURE_EXTRACT_INTERVAL = 1.0   # seconds between feature extractions
-INTERFACE = "en0"                # network interface
 
 REQUIRED_FEATURES = [
     'Destination Port', 'Flow Duration', 'Total Fwd Packets', 'Total Length of Fwd Packets',
@@ -23,7 +18,6 @@ REQUIRED_FEATURES = [
     'act_data_pkt_fwd', 'min_seg_size_forward', 'Active Mean', 'Active Max', 'Active Min',
     'Idle Mean', 'Idle Max', 'Idle Min'
 ]
-
 # Declare a dictionary to store flow statistcs
 # defaultdict() will add a new entry based on provided value if the key being called is not defined
 FLOW_STATS = defaultdict(lambda: {
@@ -67,24 +61,36 @@ FLOW_STATS = defaultdict(lambda: {
 
 class NIDSEngine:
 
-    def __init__(self, interface='en0', model_path='/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib', on_log=None, on_throughput=None):
+    def __init__(
+            self, 
+            interface='en0', 
+            model_path='/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib', 
+            on_log=None, 
+            on_throughput=None,
+            flow_timeout=60,
+            inactivity_threshold=1.0,
+            feature_extract_interval=1.0):
+        
         self.interface = interface
         self.model = joblib.load(model_path)
         self.on_log = on_log or (lambda msg: print(msg))
         self.on_throughput = on_throughput or None
-
+        self.flow_timeout = flow_timeout
+        self.inactivity_threshold = inactivity_threshold
+        self.feature_extract_interval = feature_extract_interval
         self.flow_stats = FLOW_STATS
         self.required_features = REQUIRED_FEATURES
+        
         self.capturing = False
         self.packet_count = 0
-        self._prev_count = 0
+        self.prev_count = 0
     
     def start(self):
         self.capturing = True
         self.on_log("[*] Started packet capture ...")
-        #threading.Thread(target=self._cleanup_flows, daemon=True).start()
+        threading.Thread(target=self._cleanup_flows, daemon=True).start()
         threading.Thread(target=self._packet_capturer, daemon=True).start()
-        #threading.Thread(target=self._throughput_monitor, daemon=True).start()
+        threading.Thread(target=self._throughput_monitor, daemon=True).start()
 
     def stop(self):
         self.capturing = False
@@ -95,12 +101,7 @@ class NIDSEngine:
                 [[features[feature] for feature in self.required_features]],
                 columns=self.required_features
             )
-            # Use a high-resolution monotonic clock for elapsed timing
-            # start_time = time.perf_counter()
-            # pred = self.model.predict(X)
-            # total_time_ms = (time.perf_counter() - start_time) * 1000
-            # msg = f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred[0]} ({total_time_ms:.2f} ms)"
-            # self.on_log(msg)
+
             try:
                 X = pd.DataFrame(
                     [[features[feature] for feature in self.required_features]],
@@ -283,7 +284,7 @@ class NIDSEngine:
             last_iat = flow['flow_iat'][-1]  # Use the most recent IAT
             
             if flow['active']:
-                if last_iat > INACTIVITY_THRESHOLD:
+                if last_iat > self.inactivity_threshold:
                     # Transition to idle
                     if flow['active_start'] is not None:
                         active_duration = current_time - flow['active_start']
@@ -291,7 +292,7 @@ class NIDSEngine:
                     flow['active'] = False
                     flow['idle_start'] = current_time
             else:
-                if last_iat <= INACTIVITY_THRESHOLD:
+                if last_iat <= self.inactivity_threshold:
                     # Transition to active  
                     if flow['idle_start'] is not None:
                         idle_duration = current_time - flow['idle_start']
@@ -369,22 +370,40 @@ class NIDSEngine:
             flow['last_bwd_packet_time'] = current_time
 
         # call _feature_extractor()
-        if (flow['last_detection_time'] is None) or (current_time - flow['last_detection_time'] > FEATURE_EXTRACT_INTERVAL):
+        if (flow['last_detection_time'] is None) or (current_time - flow['last_detection_time'] > self.feature_extract_interval):
                 self._feature_extractor(flow_key)
                 flow['last_detection_time'] = current_time
 
     def _packet_capturer(self):
         sniff(iface=self.interface, prn=self._packet_parser, store=False, stop_filter=lambda _: not self.capturing) # prn is the fallback function for each captured packets
 
+    def _cleanup_flows(self):
+        while True:
+            now = time.time()
+            for key in list(self.flow_stats.keys()):
+                if self.flow_stats[key]['end_time'] and now - self.flow_stats[key]['end_time'] > self.flow_timeout:
+                    del self.flow_stats[key]
+            time.sleep(10)
+
+    def _throughput_monitor(self):
+        while True:
+            time.sleep(1)
+            current_count = self.packet_count
+            throughput = current_count - self.prev_count  # packets processed in the last second
+            self.prev_count = current_count
+            self.on_throughput(throughput)
 
 if __name__ == "__main__":
     def log(msg):
         print(msg)
 
+    def throughput(throughput):
+        print(throughput)
+
     interface = "en0"
     model_path = "/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib"
 
-    nids = NIDSEngine(interface=interface, model_path=model_path, on_log=log)
+    nids = NIDSEngine(interface=interface, model_path=model_path, on_log=log, on_throughput=throughput)
     nids.start()
 
     try:
