@@ -1,3 +1,4 @@
+import psutil
 import threading
 import time
 from collections import defaultdict, deque
@@ -72,6 +73,7 @@ class NIDSEngine:
             model_path='/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib', 
             on_log=None, 
             on_throughput=None,
+            on_resource_usage=None,
             flow_timeout=60,
             inactivity_threshold=1.0,
             feature_extract_interval=1.0
@@ -96,6 +98,7 @@ class NIDSEngine:
             self.model = joblib.load(model_path)
             self.on_log = on_log or (lambda msg: print(msg))
             self.on_throughput = on_throughput or None
+            self.on_resource_usage = on_resource_usage or None
             self.flow_timeout = flow_timeout
             self.inactivity_threshold = inactivity_threshold
             self.feature_extract_interval = feature_extract_interval
@@ -115,10 +118,11 @@ class NIDSEngine:
         - Throughput monitoring (performance tracking)
         """
         self.capturing = True
-        self.on_log("[*] Started packet capture ...")
+        # self.on_log("[*] Started packet capture ...")
         threading.Thread(target=self._cleanup_flows, daemon=True).start()
         threading.Thread(target=self._packet_capturer, daemon=True).start()
         threading.Thread(target=self._throughput_monitor, daemon=True).start()
+        threading.Thread(target=self._resource_usage_monitor, daemon=True).start()
 
     def stop(self):
         """Stop all NIDS operations and background threads.
@@ -127,11 +131,11 @@ class NIDSEngine:
         and monitoring threads on their next iteration.
         """
         self.capturing = False
-        self.on_log("[!] Stopped packet capture ...")
+        # self.on_log("[!] Stopped packet capture ...")
 
     def _anomaly_detector(self, flow_key, features):
         """Detect network anomalies using trained ML model.
-    
+
         Converts extracted features to DataFrame format and runs inference
         with the trained model to classify network flow behavior.
         
@@ -161,8 +165,9 @@ class NIDSEngine:
             pred = self.model.predict(X)
             total_time_ms = (time.perf_counter() - start_time) * 1000
             
-            msg = f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred[0]} ({total_time_ms:.2f} ms)"
-            self.on_log(msg)
+            # msg = f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred[0]} ({total_time_ms:.2f} ms)"
+            # self.on_log(msg)
+            self.on_log(flow_key, pred[0], total_time_ms)
             
         except Exception as e:
             self.on_log(f"Detection error for {flow_key}: {str(e)}")
@@ -504,46 +509,48 @@ class NIDSEngine:
             self.prev_count = current_count
             self.on_throughput(throughput)
 
-if __name__ == "__main__":
-    import argparse
-    
-    def main():
-        """Main function to start NIDS with or without GUI."""
-        parser = argparse.ArgumentParser(description='Network Intrusion Detection System')
-        parser.add_argument('--gui', action='store_true', help='Start with GUI interface')
-        parser.add_argumenst('--interface', default='en0', help='Network interface to monitor')
-        parser.add_argument('--model', default='/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib', 
-                          help='Path to trained model')
+    def _resource_usage_monitor(self):
+        """Minimal resource monitoring with reduced overhead"""
+        process = psutil.Process()
         
-        args = parser.parse_args()
-        
-        # Create NIDS engine
-        nids = NIDSEngine(
-            interface=args.interface,
-            model_path=args.model
-        )
-        
-        if args.gui:
-            # Start with GUI
-            gui = NIDSGUI(nids)
-            gui.start_gui()
-        else:
-            # Start in console mode
-            def log(msg):
-                print(msg)
-            
-            def throughput(tput):
-                print(f"Throughput: {tput} pkt/s")
-            
-            nids.on_log = log
-            nids.on_throughput = throughput
-            
-            nids.start()
-            
+        while self.capturing:
             try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                nids.stop()
-    
-    main()
+                # Use longer interval to reduce overhead
+                time.sleep(2)
+                
+                # Sample CPU over shorter interval to reduce active time
+                cpu_usage = process.cpu_percent(interval=0.05)
+                
+                # Get memory (this is very fast)
+                mem_info = process.memory_info()
+                mem_usage_mb = mem_info.rss / (1024 * 1024)
+                
+                if self.on_resource_usage:
+                    self.on_resource_usage(cpu_usage, mem_usage_mb)  # Skip memory percent calc
+                    
+            except Exception:
+                # Silent fail to avoid log overhead
+                pass
+        
+if __name__ == "__main__":
+
+    def log(flow_key, pred, total_time_ms):
+        print(f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred} ({total_time_ms:.2f} ms)]")
+
+    def throughput(throughput):
+        print(f"throughput: {throughput}")
+
+    def resource(cpu_usage, memory_usage):
+        print(f"cpu: {cpu_usage} memory: {memory_usage}")
+
+    interface = "en0"
+    model_path = "/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib"
+
+    nids = NIDSEngine(interface=interface, model_path=model_path, on_log=log, on_throughput=throughput, on_resource_usage=resource)
+    nids.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        nids.stop()
