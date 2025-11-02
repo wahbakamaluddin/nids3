@@ -97,8 +97,8 @@ class NIDSEngine:
             self.interface = interface
             self.model = joblib.load(model_path)
             self.on_log = on_log or (lambda msg: print(msg))
-            self.on_throughput = on_throughput or None
-            self.on_resource_usage = on_resource_usage or None
+            self.on_throughput = on_throughput or (lambda throughput=0: None)
+            self.on_resource_usage = on_resource_usage or (lambda cpu=0, mem=0: None)
             self.flow_timeout = flow_timeout
             self.inactivity_threshold = inactivity_threshold
             self.feature_extract_interval = feature_extract_interval
@@ -116,11 +116,11 @@ class NIDSEngine:
         - Flow cleanup (removes stale flows)
         - Packet capture (main packet processing)
         - Throughput monitoring (performance tracking)
+        - Resrouce usage monitoring (resoruce usage monitoring)
         """
         self.capturing = True
-        # self.on_log("[*] Started packet capture ...")
-        threading.Thread(target=self._cleanup_flows, daemon=True).start()
         threading.Thread(target=self._packet_capturer, daemon=True).start()
+        threading.Thread(target=self._cleanup_flows, daemon=True).start()
         threading.Thread(target=self._throughput_monitor, daemon=True).start()
         threading.Thread(target=self._resource_usage_monitor, daemon=True).start()
 
@@ -131,7 +131,6 @@ class NIDSEngine:
         and monitoring threads on their next iteration.
         """
         self.capturing = False
-        # self.on_log("[!] Stopped packet capture ...")
 
     def _anomaly_detector(self, flow_key, features):
         """Detect network anomalies using trained ML model.
@@ -522,11 +521,11 @@ class NIDSEngine:
                 cpu_usage = process.cpu_percent(interval=0.05)
                 
                 # Get memory (this is very fast)
-                mem_info = process.memory_info()
-                mem_usage_mb = mem_info.rss / (1024 * 1024)
+                memory_info = process.memory_info()
+                memory_usage_mb = memory_info.rss / (1024 * 1024)
                 
                 if self.on_resource_usage:
-                    self.on_resource_usage(cpu_usage, mem_usage_mb)  # Skip memory percent calc
+                    self.on_resource_usage(cpu_usage, memory_usage_mb)
                     
             except Exception:
                 # Silent fail to avoid log overhead

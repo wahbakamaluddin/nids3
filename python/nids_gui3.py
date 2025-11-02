@@ -118,6 +118,10 @@ class NIDSGUI:
     def throughput_callback(self, throughput):
         """Callback for throughput updates"""
         self.throughput_value = throughput
+        
+    def resource_usage_callback(self, cpu_usage, memory_usage):
+        self.cpu_usage_value = cpu_usage
+        self.mempory_usage_value = memory_usage
 
     def start_capture(self):
         """Start packet capture"""
@@ -136,7 +140,8 @@ class NIDSGUI:
                 interface=interface,
                 model_path=model_path,
                 on_log=self.log_callback,
-                on_throughput=self.throughput_callback
+                on_throughput=self.throughput_callback,
+                on_resource_usage=self.resource_usage_callback,
             )
             
             self.nids_engine.start()
@@ -146,6 +151,7 @@ class NIDSGUI:
             self.stop_btn.config(state="normal")
             
             self._update_log_widget(f"[*] Started packet capture on interface {interface}\n", "lime")
+            self._update_log_widget(f"[*] Anomaly detector: {model_path}\n", "lime")
             
         except FileNotFoundError:
             self._update_log_widget(f"[ERROR] Model file not found: {model_path}\n", "red")
@@ -173,15 +179,8 @@ class NIDSGUI:
         """Update system resource usage displays"""
         while True:
             if self.root.winfo_exists():
+                
                 try:
-                    # CPU usage
-                    cpu_percent = psutil.Process().cpu_percent(interval=0.1)
-                    
-                    # Memory usage
-                    memory = psutil.Process().virtual_memory()
-                    mem_percent = memory.percent
-                    
-                    # Power status (simplified)
                     power_plugged = psutil.sensors_battery().power_plugged if hasattr(psutil, "sensors_battery") and psutil.sensors_battery() else None
                     power_status = "Plugged" if power_plugged else "Battery" if power_plugged is not None else "Unknown"
                     
@@ -190,8 +189,8 @@ class NIDSGUI:
                     
                     # Update labels in thread-safe manner
                     self.root.after(0, self._update_resource_labels, 
-                                   f"CPU: {cpu_percent:.1f}%",
-                                   f"Memory: {mem_percent:.1f}%",
+                                   f"CPU: {self.cpu_usage_value:.1f}%",
+                                   f"Memory: {self.mempory_usage_value:.1f} mb",
                                    f"Power: {power_status}",
                                    throughput_text)
                     
