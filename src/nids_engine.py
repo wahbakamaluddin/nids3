@@ -160,13 +160,20 @@ class NIDSEngine:
                 columns=self.required_features
             )
             
-            start_time = time.perf_counter()
-            pred = self.model.predict(X)
-            total_time_ms = (time.perf_counter() - start_time) * 1000
+            # start_time = time.perf_counter()
+            # pred = self.model.predict(X)
+            # total_time_ms = (time.perf_counter() - start_time) * 1000
             
+            start_time = time.time()
+            prediction_probabilities = self.model.predict_proba(X)
+            prediction_label = self.model.classes_[prediction_probabilities.argmax()]
+            prediction_confidence = prediction_probabilities.max()
+            total_time_ms = (time.time() - start_time) * 1000
+
+
             # msg = f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred[0]} ({total_time_ms:.2f} ms)"
             # self.on_log(msg)
-            self.on_log(flow_key, pred[0], total_time_ms)
+            self.on_log(flow_key, prediction_label, prediction_confidence, total_time_ms)
             
         except Exception as e:
             self.on_log(f"Detection error for {flow_key}: {str(e)}")
@@ -533,8 +540,8 @@ class NIDSEngine:
         
 if __name__ == "__main__":
 
-    def log(flow_key, pred, total_time_ms):
-        print(f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {pred} ({total_time_ms:.2f} ms)]")
+    def log(flow_key, prediction_label, prediction_confidence, total_time_ms):
+        print(f"[{time.strftime('%H:%M:%S')}] Flow {flow_key} → {prediction_label} {prediction_confidence} ({total_time_ms:.2f} ms)]")
 
     def throughput(throughput):
         print(f"throughput: {throughput}")
