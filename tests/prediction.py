@@ -139,9 +139,9 @@ dataframe = np.array([flow_web_attack['features'][feature] for feature in requir
 print(dataframe)
 
 
-knn_model = joblib.load('/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/knn.joblib')
-random_forest_model = joblib.load('/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/random_forest.joblib')
-xgb_model = joblib.load('/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib')
+knn_model = joblib.load(r'D:\github\models\knn.joblib')
+random_forest_model = joblib.load(r'D:\github\models\random_forest.joblib')
+xgb_model = joblib.load(r'D:\github\models\xgb.joblib')
 
 def prediction(model):
     start_time = time.time()
@@ -151,14 +151,23 @@ def prediction(model):
     return prediction, total_time
 
 
-knn_prediction, knn_total_time = prediction(knn_model)
-random_forest_prediction, random_forest_total_time = prediction(random_forest_model)
-xgb_prediction, xgb_total_time = prediction(xgb_model)
+# knn_prediction, knn_total_time = prediction(knn_model)
+# random_forest_prediction, random_forest_total_time = prediction(random_forest_model)
+# xgb_prediction, xgb_total_time = prediction(xgb_model)
 
+
+# print(f'''
+#     knn_prediction: {knn_prediction} - {knn_total_time}
+#     random_forest_prediction: {random_forest_prediction} - {random_forest_total_time}
+#     xgb_prediction: {xgb_prediction} - {xgb_total_time}
+#       '''
+#       )
 
 print(f'''
-    knn_prediction: {knn_prediction} - {knn_total_time}
-    random_forest_prediction: {random_forest_prediction} - {random_forest_total_time}
-    xgb_prediction: {xgb_prediction} - {xgb_total_time}
-      '''
-      )
+
+    knn classes: {knn_model.classes_} - {knn_model.predict_proba(dataframe)}
+    rf classes: {random_forest_model.classes_} - {random_forest_model.predict_proba(dataframe)}
+    xgb classes: {xgb_model.classes_} - {xgb_model.predict_proba(dataframe)}
+
+'''
+)
