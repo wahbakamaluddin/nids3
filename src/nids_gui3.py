@@ -271,10 +271,10 @@ class NIDSGUI:
             self._update_log_widget("[ERROR] Invalid parameter values\n")
             return False
 
-    def log_callback(self, flow_key, prediction, processing_time):
+    def log_callback(self, flow_key, prediction_label, prediction_probability, processing_time):
         """Callback for NIDS engine to log detection results"""
         timestamp = time.strftime('%H:%M:%S')
-        log_entry = f"[{timestamp}] Flow {flow_key} → {prediction} ({processing_time:.2f} ms)\n"
+        log_entry = f"[{timestamp}] Flow {flow_key} → {prediction_label} {prediction_probability} ({processing_time:.2f} ms)\n"
         
         # Add to queue instead of immediate GUI update
         self.log_queue.append(log_entry)
