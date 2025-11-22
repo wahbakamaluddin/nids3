@@ -423,6 +423,7 @@ def detect_anomalies(flow_key):
     
     save_to_csv()
 
+    # Remove flow from flow_stats after exporting
     flow_stats.pop(flow_key)
     # flow = flow_stats[flow_key]
 
