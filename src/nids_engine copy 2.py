@@ -342,7 +342,7 @@ class NIDSEngine:
         
         # Get packet_length and current time
         packet_size = len(packet)
-        current_time = time.time()
+        current_time = packet.time # timestamp in seconds set by Scapy
         
         # Generate flow identifier (key) as 5-tuple network flow
         # 1 communication will produce 1 entry in flow_stats

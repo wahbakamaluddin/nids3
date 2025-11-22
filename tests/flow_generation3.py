@@ -6,9 +6,9 @@ import time
 import re
 
 TIME_WINDOW = 60
-ACTIVITY_TIMEOUT = 5
 CLEANUP_INTERVAL = 120
-# Flow keys to whitelist
+ACTIVITY_TIMEOUT = 5
+FLOW_TIMEOUT = 120  # 120 seconds
 WHITELIST_PATTERNS = [
     re.compile(r"^0\.0\.0\.0:68->255\.255\.255\.255:67-UDP$"),  # DHCP Client to Server
     re.compile(r"^192\.168\.\d{1,3}\.\d{1,3}:\d+->255\.255\.255\.255:68-UDP$"),  # DHCP Server to Client
@@ -21,7 +21,7 @@ exported_rows = []
 flow_stats = defaultdict(lambda: {
             'start_time': None,
             'end_time': None,
-            'last_detection_time': None,
+            'duration': 0,
             'fwd_packets': 0,
             'bwd_packets': 0,
             'fwd_bytes': 0,
@@ -128,8 +128,9 @@ def process_packet(packet):
             flow['active_start'] = current_time
             flow['active'] = True
         
-        # Update flow end time
+        # Update flow end time and duration
         flow['end_time'] = current_time
+        flow['duration'] = flow['end_time'] - flow['start_time']
         
         # Calculate and store inter-arrival time
         if flow['last_packet_time'] is not None:
@@ -222,17 +223,24 @@ def process_packet(packet):
         print(f"Received {flow_key}")
 
         # Check if it is time to detect anomalies
-        if flow['last_detection_time'] is None \
-            and current_time - flow['start_time'] >= time_window \
-            and flow['fwd_packets'] + flow['bwd_packets'] >= 3:
-            # First detection after time window
-            detect_anomalies(flow_key)
+        if protocol == 'TCP':
+            if flow['duration'] >= FLOW_TIMEOUT or flow['fin_flags'] >= 2 or flow['rst_flags'] > 0:
+                detect_anomalies(flow_key)
+
+        elif protocol == 'UDP':
+            if flow['duration'] >= FLOW_TIMEOUT:
+                detect_anomalies(flow_key)
+        # if flow['last_detection_time'] is None \
+        #     and current_time - flow['start_time'] >= time_window \
+        #     and flow['fwd_packets'] + flow['bwd_packets'] >= 3:
+        #     # First detection after time window
+        #     detect_anomalies(flow_key)
         
-        elif flow['last_detection_time'] is not None \
-            and current_time - flow['last_detection_time'] >= time_window \
-            and flow['fwd_packets'] + flow['bwd_packets'] >= 3:
-            # Subsequent detections based on last detection time
-            detect_anomalies(flow_key)
+        # elif flow['last_detection_time'] is not None \
+        #     and current_time - flow['last_detection_time'] >= time_window \
+        #     and flow['fwd_packets'] + flow['bwd_packets'] >= 3:
+        #     # Subsequent detections based on last detection time
+        #     detect_anomalies(flow_key)
 
 def extract_features(flow_key):
         flow = flow_stats[flow_key]
@@ -242,8 +250,6 @@ def extract_features(flow_key):
         if duration <= 0:  # Avoid division by zero
             duration = 0.001
         
-       
-
         # Initialize features dictionary
         features = {}
         
@@ -284,7 +290,7 @@ def extract_features(flow_key):
 
             
         # Basic flow features
-        features['Flow Duration'] = duration * 1000  # Convert to milliseconds
+        features['Flow Duration'] = duration * 1000  # Convert to microseconds
         features['Flow Bytes/s'] = (flow['fwd_bytes'] + flow['bwd_bytes']) / duration
         features['Flow Packets/s'] = (flow['fwd_packets'] + flow['bwd_packets']) / duration
         
@@ -320,7 +326,7 @@ def extract_features(flow_key):
         else:
             features['Average Packet Size'] = 0
         
-        # IAT (Inter Arrival Time) features
+        # IAT (Inter Arrival Time) features - converted to microseconds
         if flow['flow_iat']:
             features['Flow IAT Mean'] = np.mean(flow['flow_iat'])
             features['Flow IAT Std'] = np.std(flow['flow_iat']) if len(flow['flow_iat']) > 1 else 0
@@ -332,7 +338,7 @@ def extract_features(flow_key):
             features['Flow IAT Max'] = 0
             features['Flow IAT Min'] = 0
         
-        # Forward IAT
+        # Forward IAT - converted to microseconds
         if flow['fwd_iat']:
             features['Fwd IAT Total'] = sum(flow['fwd_iat'])
             features['Fwd IAT Mean'] = np.mean(flow['fwd_iat'])
@@ -346,7 +352,7 @@ def extract_features(flow_key):
             features['Fwd IAT Max'] = 0
             features['Fwd IAT Min'] = 0
         
-        # Backward IAT
+        # Backward IAT - converted to microseconds
         if flow['bwd_iat']:
             features['Bwd IAT Total'] = sum(flow['bwd_iat'])
             features['Bwd IAT Mean'] = np.mean(flow['bwd_iat'])
@@ -369,7 +375,7 @@ def extract_features(flow_key):
         features['Init_Win_bytes_forward'] = flow['fwd_win_bytes'] if flow['fwd_win_bytes'] is not None else 0
         features['Init_Win_bytes_backward'] = flow['bwd_win_bytes'] if flow['bwd_win_bytes'] is not None else 0
         
-        # Active and idle time statistics
+        # Active and idle time statistics - converted to microseconds
         if flow['active_times']:
             features['Active Mean'] = np.mean(flow['active_times'])
             features['Active Max'] = max(flow['active_times'])
@@ -409,7 +415,6 @@ def detect_anomalies(flow_key):
     if is_whitelisted(flow_key):
         return  # Skip whitelist flows
 
-
     features = extract_features(flow_key)
 
     print(f"Extracted features for flow {flow_key}")
@@ -417,49 +422,49 @@ def detect_anomalies(flow_key):
     exported_rows.append(features)
     
     save_to_csv()
-    flow_stats[flow_key]['last_detection_time'] = time.time()
 
-    flow = flow_stats[flow_key]
+    flow_stats.pop(flow_key)
+    # flow = flow_stats[flow_key]
 
-     # Reset packet and byte counters
-    flow['fwd_packets'] = 0
-    flow['bwd_packets'] = 0
-    flow['fwd_bytes'] = 0 
-    flow['bwd_bytes'] = 0
-    flow['fwd_header_bytes'] = 0    
-    flow['bwd_header_bytes'] = 0    
+    #  # Reset packet and byte counters
+    # flow['fwd_packets'] = 0
+    # flow['bwd_packets'] = 0
+    # flow['fwd_bytes'] = 0 
+    # flow['bwd_bytes'] = 0
+    # flow['fwd_header_bytes'] = 0    
+    # flow['bwd_header_bytes'] = 0    
     
-    # Reset window size
-    flow['fwd_win_bytes'] = None 
-    flow['bwd_win_bytes'] = None    
+    # # Reset window size
+    # flow['fwd_win_bytes'] = None 
+    # flow['bwd_win_bytes'] = None    
 
-    # Reset flag counters
-    flow['fwd_psh_flags'] = 0
-    flow['fwd_urg_flags'] = 0
-    flow['fin_flags'] = 0
-    flow['syn_flags'] = 0
-    flow['rst_flags'] = 0
-    flow['psh_flags'] = 0
-    flow['ack_flags'] = 0
-    flow['urg_flags'] = 0
-    flow['ece_flags'] = 0
+    # # Reset flag counters
+    # flow['fwd_psh_flags'] = 0
+    # flow['fwd_urg_flags'] = 0
+    # flow['fin_flags'] = 0
+    # flow['syn_flags'] = 0
+    # flow['rst_flags'] = 0
+    # flow['psh_flags'] = 0
+    # flow['ack_flags'] = 0
+    # flow['urg_flags'] = 0
+    # flow['ece_flags'] = 0
 
-    # Clear packet timing queues but maintain connection
-    flow['fwd_packet_sizes'].clear()
-    flow['bwd_packet_sizes'].clear() 
-    flow['packet_sizes'].clear()
-    flow['fwd_iat'].clear()
-    flow['bwd_iat'].clear()
-    flow['flow_iat'].clear()
-    flow['active_times'].clear()
-    flow['idle_times'].clear()
-    flow['min_seg_size_forward'] = float('inf')
+    # # Clear packet timing queues but maintain connection
+    # flow['fwd_packet_sizes'].clear()
+    # flow['bwd_packet_sizes'].clear() 
+    # flow['packet_sizes'].clear()
+    # flow['fwd_iat'].clear()
+    # flow['bwd_iat'].clear()
+    # flow['flow_iat'].clear()
+    # flow['active_times'].clear()
+    # flow['idle_times'].clear()
+    # flow['min_seg_size_forward'] = float('inf')
 
-    # Reset data packet count and active status
-    flow['fwd_data_packets'] = 0
-    flow['active'] = False
+    # # Reset data packet count and active status
+    # flow['fwd_data_packets'] = 0
+    # flow['active'] = False
 
-def save_to_csv(output_file="/home/wahba/Documents/nids3/tests/flow/flow_tuesday_flow_generation4.csv"):
+def save_to_csv(output_file="/home/wahba/Documents/nids3/tests/flow/flow_wednesday_flow_generation7.csv"):
     global exported_rows
 
     df = pd.DataFrame(exported_rows)
