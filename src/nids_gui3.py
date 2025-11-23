@@ -5,7 +5,7 @@ import threading
 import time
 import psutil
 from collections import deque
-from nids_engine import NIDSEngine  # Import your existing NIDSEngine
+from nids_engine2 import NIDSEngine  # Import your existing NIDSEngine
 
 class NIDSGUI:
     def __init__(self):
@@ -27,9 +27,8 @@ class NIDSGUI:
         self.resource_update_interval = 1.0  # 1 second for resource updates
         
         # Default parameters
-        self.flow_timeout = tk.IntVar(value=60)
-        self.inactivity_threshold = tk.DoubleVar(value=1.0)
-        self.feature_extract_interval = tk.DoubleVar(value=1.0)
+        self.flow_timeout = tk.IntVar(value=120)
+        self.activity_timeout = tk.DoubleVar(value=5)
         
         self.setup_gui()
         
@@ -90,13 +89,13 @@ class NIDSGUI:
         # Network Interface - Compact
         ttk.Label(config_frame, text="Interface:").grid(row=0, column=0, sticky="w", padx=(0, 2))
         self.interface_entry = ttk.Entry(config_frame, width=12)
-        self.interface_entry.insert(0, "en0")
+        self.interface_entry.insert(0, "dummy0")
         self.interface_entry.grid(row=0, column=1, sticky="w", padx=(0, 10))
         
         # Model Path - Compact
         ttk.Label(config_frame, text="Model:").grid(row=0, column=2, sticky="w", padx=(0, 2))
         self.model_entry = ttk.Entry(config_frame, width=40)
-        self.model_entry.insert(0, "/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib")
+        self.model_entry.insert(0, "/home/wahba/Documents/models_anacletu/xgboost.joblib")
         self.model_entry.grid(row=0, column=3, sticky="we", padx=(0, 10))
         
         # Compact Parameters in same row
@@ -117,23 +116,11 @@ class NIDSGUI:
             from_=0.1, 
             to=10.0, 
             increment=0.1,
-            textvariable=self.inactivity_threshold,
+            textvariable=self.activity_timeout,
             width=6,
             format="%.1f"
         )
         inactivity_spinbox.grid(row=0, column=7, sticky="w", padx=(0, 8))
-        
-        ttk.Label(config_frame, text="Feature:").grid(row=0, column=8, sticky="w", padx=(0, 2))
-        feature_spinbox = ttk.Spinbox(
-            config_frame, 
-            from_=0.1, 
-            to=10.0, 
-            increment=0.1,
-            textvariable=self.feature_extract_interval,
-            width=6,
-            format="%.1f"
-        )
-        feature_spinbox.grid(row=0, column=9, sticky="w", padx=(0, 8))
         
         # Reset button
         ttk.Button(
@@ -211,9 +198,8 @@ class NIDSGUI:
 
     def reset_parameters(self):
         """Reset parameters to default values"""
-        self.flow_timeout.set(60)
-        self.inactivity_threshold.set(1.0)
-        self.feature_extract_interval.set(1.0)
+        self.flow_timeout.set(120)
+        self.activity_timeout.set(5)
         self._update_log_widget("[*] Parameters reset to defaults\n")
 
     def copy_log(self):
@@ -247,22 +233,17 @@ class NIDSGUI:
         """Validate all parameters before starting capture"""
         try:
             flow_timeout = self.flow_timeout.get()
-            inactivity_threshold = self.inactivity_threshold.get()
-            feature_interval = self.feature_extract_interval.get()
+            activity_timeout = self.activity_timeout.get()
             
             if flow_timeout < 10:
                 self._update_log_widget("[ERROR] Flow timeout must be at least 10 seconds\n")
                 return False
                 
-            if inactivity_threshold <= 0:
+            if activity_timeout <= 0:
                 self._update_log_widget("[ERROR] Inactivity threshold must be positive\n")
                 return False
                 
-            if feature_interval <= 0:
-                self._update_log_widget("[ERROR] Feature extraction interval must be positive\n")
-                return False
-                
-            if inactivity_threshold > flow_timeout:
+            if activity_timeout > flow_timeout:
                 self._update_log_widget("[WARNING] Inactivity threshold is larger than flow timeout\n")
                 
             return True
@@ -335,8 +316,7 @@ class NIDSGUI:
         try:
             # Get parameter values
             flow_timeout = self.flow_timeout.get()
-            inactivity_threshold = self.inactivity_threshold.get()
-            feature_extract_interval = self.feature_extract_interval.get()
+            activity_timeout = self.activity_timeout.get()
             
             self.nids_engine = NIDSEngine(
                 interface=interface,
@@ -345,8 +325,7 @@ class NIDSGUI:
                 on_throughput=self.throughput_callback,
                 on_resource_usage=self.resource_usage_callback,
                 flow_timeout=flow_timeout,
-                inactivity_threshold=inactivity_threshold,
-                feature_extract_interval=feature_extract_interval
+                activity_timeout=activity_timeout,
             )
             
             self.nids_engine.start()
@@ -357,7 +336,7 @@ class NIDSGUI:
             
             self._update_log_widget(f"[*] Started packet capture on interface {interface}\n")
             self._update_log_widget(f"[*] Anomaly detector: {model_path}\n")
-            self._update_log_widget(f"[*] Parameters - Timeout: {flow_timeout}s, Inactivity: {inactivity_threshold}s, Feature Interval: {feature_extract_interval}s\n")
+            self._update_log_widget(f"[*] Parameters - Flow Timeout: {flow_timeout}s, Activity Timeout: {activity_timeout}s\n")
             
         except FileNotFoundError:
             self._update_log_widget(f"[ERROR] Model file not found: {model_path}\n")

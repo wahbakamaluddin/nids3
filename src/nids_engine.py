@@ -549,8 +549,8 @@ if __name__ == "__main__":
     def resource(cpu_usage, memory_usage):
         print(f"cpu: {cpu_usage} memory: {memory_usage}")
 
-    interface = "en0"
-    model_path = "/Users/wahba/Library/Mobile Documents/com~apple~CloudDocs/others/nids3/models/xgb.joblib"
+    interface = "dummy0"
+    model_path = "/home/wahba/Documents/models_anacletu/xgboost.joblib"
 
     nids = NIDSEngine(interface=interface, model_path=model_path, on_log=log, on_throughput=throughput, on_resource_usage=resource)
     nids.start()

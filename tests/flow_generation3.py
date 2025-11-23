@@ -465,7 +465,7 @@ def detect_anomalies(flow_key):
     # flow['fwd_data_packets'] = 0
     # flow['active'] = False
 
-def save_to_csv(output_file="/home/wahba/Documents/nids3/tests/flow/flow_wednesday_flow_generation7.csv"):
+def save_to_csv(output_file="/home/wahba/Documents/nids3/tests/flow/flow_wednesday_flow_generation9.csv"):
     global exported_rows
 
     df = pd.DataFrame(exported_rows)
